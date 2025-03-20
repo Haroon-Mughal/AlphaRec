@@ -1,1 +1,2 @@
 Data/General/amazon_movie/item_info/item_cf_embeds_large3_array.npy filter=lfs diff=lfs merge=lfs -text
+data/General/* filter=lfs diff=lfs merge=lfs -text
