@@ -62,6 +62,9 @@ def parse_args():
         parser.add_argument('--neg_sample',type=int,default=1)
         parser.add_argument('--infonce', type=int, default=0,
                     help='whether to use infonce loss or not')
+        parser.add_argument('--use_supcon', type=int, default=0, help='Enable SupCon loss')
+        parser.add_argument('--combine_loss', type=int, default=0, help='Combine infonce and supcon loss')
+        parser.add_argument('--supcon_weight', type=float, default=0.1, help='Weight for supcon loss')
         parser.add_argument("--train_norm", action="store_true",
                             help="train_norm")
         parser.add_argument("--pred_norm", action="store_true",

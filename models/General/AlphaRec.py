@@ -44,7 +44,7 @@ class AlphaRec_RS(AbstractRS):
             num_batches += 1
 
         return [running_loss/num_batches]
-
+    
 class AlphaRec_Data(AbstractData):
     def __init__(self, args):
         super().__init__(args)
@@ -89,6 +89,43 @@ class AlphaRec_Data(AbstractData):
         user_cf_embeds_dict = dict(sorted(user_cf_embeds_dict.items(), key=lambda item: item[0]))
 
         self.user_cf_embeds = np.array(list(user_cf_embeds_dict.values()))
+
+def supcon_loss(user_emb, pos_item_embs, neg_item_embs, mask, tau):
+    """
+    Computes supervised contrastive loss for user-based anchors.
+
+    Parameters:
+    - user_emb: Tensor [B, D] - anchor user embeddings
+    - pos_item_embs: Tensor [B, P, D] - user's historical interacted item embeddings (padded)
+    - neg_item_embs: Tensor [B, N, D] - negative item embeddings
+    - mask: Tensor [B, P] - 1 for real positives, 0 for padding
+    - tau: float - temperature
+
+    Returns:
+    - Scalar loss (SupCon)
+    """
+    # Normalize for cosine similarity
+    user_emb = F.normalize(user_emb, dim=-1)
+    pos_item_embs = F.normalize(pos_item_embs, dim=-1)
+    neg_item_embs = F.normalize(neg_item_embs, dim=-1)
+
+    B, P, D = pos_item_embs.shape
+    user_exp = user_emb.unsqueeze(1).expand(-1, P, -1)  # [B, P, D]
+
+    # Compute similarities
+    pos_sim = torch.exp(torch.sum(user_exp * pos_item_embs, dim=-1) / tau)  # [B, P]
+    neg_sim = torch.exp(torch.matmul(user_emb, neg_item_embs.transpose(1, 2)) / tau)  # [B, N]
+
+    denom = pos_sim + neg_sim.sum(dim=1, keepdim=True)  # [B, P]
+    log_prob = torch.log(pos_sim / (denom + 1e-8))       # [B, P]
+
+    # Mask padded positives
+    masked_log_prob = log_prob * mask                   # [B, P]
+    user_loss = -masked_log_prob.sum(dim=1) / (mask.sum(dim=1) + 1e-8)  # [B]
+
+    return user_loss.mean()
+
+
 
 class AlphaRec(AbstractModel):
     def __init__(self, args, data) -> None:
@@ -170,17 +207,41 @@ class AlphaRec(AbstractModel):
             pos_emb = F.normalize(pos_emb, dim = -1)
             neg_emb = F.normalize(neg_emb, dim = -1)
         
-        pos_ratings = torch.sum(users_emb*pos_emb, dim = -1)
-        neg_ratings = torch.matmul(torch.unsqueeze(users_emb, 1), 
-                                       neg_emb.permute(0, 2, 1)).squeeze(dim=1)
+        if(self.args.infonce == 1):
+           pos_ratings = torch.sum(users_emb*pos_emb, dim = -1)
+           neg_ratings = torch.matmul(torch.unsqueeze(users_emb, 1), neg_emb.permute(0, 2, 1)).squeeze(dim=1)
 
-        numerator = torch.exp(pos_ratings / self.tau)
+           numerator = torch.exp(pos_ratings / self.tau)
 
-        denominator = numerator + torch.sum(torch.exp(neg_ratings / self.tau), dim = 1)
+           denominator = numerator + torch.sum(torch.exp(neg_ratings / self.tau), dim = 1)
         
-        ssm_loss = torch.mean(torch.negative(torch.log(numerator/denominator)))
+           ssm_loss = torch.mean(torch.negative(torch.log(numerator/denominator)))
 
-        return ssm_loss
+        #  optonal SupCon Loss 
+        supcon_loss_value = 0.0
+        if self.args.use_supcon:
+           # Build user history embeddings and mask
+           pos_item_lists = [self.data.train_user_list[u.item()] for u in users]
+           max_len = max(len(l) for l in pos_item_lists)
+
+           padded = torch.zeros(len(pos_item_lists), max_len, dtype=torch.long, device=users.device)
+           mask = torch.zeros_like(padded, dtype=torch.float)
+
+           for i, item_ids in enumerate(pos_item_lists):
+               padded[i, :len(item_ids)] = torch.tensor(item_ids, dtype=torch.long, device=users.device)
+               mask[i, :len(item_ids)] = 1.0
+
+           pos_item_embs = all_items[padded]  # [B, P, D]
+
+           supcon_loss_value = supcon_loss(users_emb, pos_item_embs, neg_emb, mask, self.tau)     
+            
+
+        if self.args.combine_loss:
+            return ssm_loss + self.args.supcon_weight * supcon_loss_value
+        elif self.args.use_supcon:
+            return supcon_loss_value
+        else:
+            return ssm_loss
 
     @torch.no_grad()
     def predict(self, users, items=None):

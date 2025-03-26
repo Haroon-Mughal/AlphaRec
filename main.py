@@ -23,7 +23,7 @@ if __name__ == '__main__':
     try:
         RS = eval(args.model_name + '_RS(args, special_args)') # load the recommender system
     except:
-        RS = eval(args.model_name + '_RS(args)')
+        RS = eval(args.model_name + '_RS(args)') # load the recommender system
 
     RS.execute() # train and test
     print('Done!')
