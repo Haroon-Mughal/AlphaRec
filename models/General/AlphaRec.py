@@ -114,9 +114,12 @@ def supcon_loss(user_emb, pos_item_embs, neg_item_embs, mask, tau):
 
     # Compute similarities
     pos_sim = torch.exp(torch.sum(user_exp * pos_item_embs, dim=-1) / tau)  # [B, P]
-    neg_sim = torch.exp(torch.matmul(user_emb, neg_item_embs.transpose(1, 2)) / tau)  # [B, N]
+    neg_sim = torch.exp(torch.bmm(user_emb.unsqueeze(1), neg_item_embs.transpose(1, 2)).squeeze(1) / tau)  # [B, N]
 
-    denom = pos_sim + neg_sim.sum(dim=1, keepdim=True)  # [B, P]
+    # Denominator
+    neg_sum = neg_sim.sum(dim=1, keepdim=True)  # [B, 1]
+    denom = pos_sim + neg_sum.expand(-1, pos_sim.shape[1])  # [B, P]
+    
     log_prob = torch.log(pos_sim / (denom + 1e-8))       # [B, P]
 
     # Mask padded positives
