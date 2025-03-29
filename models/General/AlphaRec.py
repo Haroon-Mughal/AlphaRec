@@ -126,7 +126,7 @@ def supcon_loss(user_emb, pos_item_embs, neg_item_embs, mask, tau, neg_sample):
         # ---------- IN-BATCH NEGATIVE SAMPLING ----------
         # Flatten all positive items across batch
         all_items_flat = neg_item_embs.view(B * P, D)             # [B*P, D]
-        all_items_flat = all_items_flat.detach()                  # optional: prevent gradients through negs
+        #all_items_flat = all_items_flat.detach()                  # optional: prevent gradients through negs
 
         # Similarities: [B, B*P]
         sim_matrix = torch.matmul(user_emb, all_items_flat.T) / tau
