@@ -270,7 +270,7 @@ class AlphaRec(AbstractModel):
 
            pos_item_embs = all_items[padded]  # [B, P, D]
 
-           if args.neg_sample == -1:
+           if self.args.neg_sample == -1:
               supcon_loss_value = supcon_loss(users_emb, pos_item_embs, pos_item_embs, mask, self.tau, self.neg_sample)  # in-batch negative sampling    
            else:
              supcon_loss_value = supcon_loss(users_emb, pos_item_embs, neg_emb, mask, self.tau, self.neg_sample)   
