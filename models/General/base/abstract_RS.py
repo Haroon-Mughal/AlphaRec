@@ -69,7 +69,8 @@ class AbstractRS(nn.Module):
         self.item_pop_max = self.data.item_pop_max 
 
         # load the model
-        self.running_model = args.model_name + '_batch' if self.inbatch else args.model_name
+        #self.running_model = args.model_name + '_batch' if self.inbatch else args.model_name
+        self.running_model = args.model_name
         # from models.General.IntentCF import IntentCF
         # self.model = IntentCF(args, self.data) # initialize the model with the graph
         exec('from models.General.'+ args.model_name + ' import ' + self.running_model) # import the model first
