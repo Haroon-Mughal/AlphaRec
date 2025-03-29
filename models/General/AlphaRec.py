@@ -31,7 +31,7 @@ class AlphaRec_RS(AbstractRS):
             if self.args.infonce == 0 or self.args.neg_sample != -1:
                 neg_items = batch[4]
                 neg_items_pop = batch[5]
-            elif self.args.infonce == 1 and self.args.neg_sample == -1      # pure supcon case 
+            elif self.args.infonce == 1 and self.args.neg_sample == -1      # in-batch negatuve supcon case 
                 neg_items = pos_items
             
             self.model.train()
