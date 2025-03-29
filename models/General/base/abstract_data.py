@@ -417,11 +417,11 @@ class TrainDataset(torch.utils.data.Dataset):
         user_pop = self.user_pop_idx[user]
         pos_item_pop = self.item_pop_idx[pos_item]
 
-        if self.infonce == 1 and self.neg_sample == -1: #in-batch
+        if self.infonce == 1 and self.neg_sample == -1: #in-batch negative sampling used for original supcon
             return user, pos_item, user_pop, pos_item_pop
 
-        elif self.infonce == 1 and self.neg_sample != -1: # InfoNCE negative sampling
-            if(len(self.nu_info) > 0):
+        elif self.infonce == 1 and self.neg_sample != -1: # InfoNCE negative sampling, for infonce and supcon external neg sampling
+            if(len(self.nu_info) > 0):                    # for mixed data
                 # period = index 
                 period = bisect.bisect_right(self.cum_nu_info, index) - 1
                 # print(self.cum_ni_info)
@@ -447,7 +447,7 @@ class TrainDataset(torch.utils.data.Dataset):
                 #     neg_items = list(np.array(neg_items) + self.nui_info[0][1] + self.nui_info[1][1])
                     
             else:
-                neg_items = randint_choice(self.n_items, size=self.neg_sample, exclusion=self.train_user_list[user])
+                neg_items = randint_choice(self.n_items, size=self.neg_sample, exclusion=self.train_user_list[user])  # for non-mixed data case
             neg_items_pop = self.item_pop_idx[neg_items]
 
             return user, pos_item, user_pop, pos_item_pop, torch.tensor(neg_items).long(), neg_items_pop
