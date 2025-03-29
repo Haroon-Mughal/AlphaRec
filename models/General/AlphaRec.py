@@ -170,7 +170,7 @@ class AlphaRec(AbstractModel):
         self.embed_size = args.hidden_size
         self.lm_model = args.lm_model
         self.model_version = args.model_version
-        self.neg_sample = args.neg
+        self.neg_sample = args.neg_sample
 
         self.init_user_cf_embeds = data.user_cf_embeds
         self.init_item_cf_embeds = data.item_cf_embeds
@@ -244,7 +244,7 @@ class AlphaRec(AbstractModel):
             pos_emb = F.normalize(pos_emb, dim = -1)
             neg_emb = F.normalize(neg_emb, dim = -1)
         
-        if(self.args.infonce == 1):
+        if(self.args.infonce == 1 and self.args.use_supcon == 0):
            pos_ratings = torch.sum(users_emb*pos_emb, dim = -1)
            neg_ratings = torch.matmul(torch.unsqueeze(users_emb, 1), neg_emb.permute(0, 2, 1)).squeeze(dim=1)
 
@@ -270,8 +270,10 @@ class AlphaRec(AbstractModel):
 
            pos_item_embs = all_items[padded]  # [B, P, D]
 
-           supcon_loss_value = supcon_loss(users_emb, pos_item_embs, neg_emb, mask, self.tau, self.neg_sample)     
-            
+           if args.neg_sample == -1:
+              supcon_loss_value = supcon_loss(users_emb, pos_item_embs, pos_item_embs, mask, self.tau, self.neg_sample)  # in-batch negative sampling    
+           else:
+             supcon_loss_value = supcon_loss(users_emb, pos_item_embs, neg_emb, mask, self.tau, self.neg_sample)   
 
         if self.args.combine_loss:
             return ssm_loss + self.args.supcon_weight * supcon_loss_value
