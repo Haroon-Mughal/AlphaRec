@@ -31,7 +31,9 @@ class AlphaRec_RS(AbstractRS):
             if self.args.infonce == 0 or self.args.neg_sample != -1:
                 neg_items = batch[4]
                 neg_items_pop = batch[5]
-
+            elif self.args.infonce == 1 and self.args.neg_sample == -1      # pure supcon case 
+                neg_items = pos_items
+            
             self.model.train()
 
             loss = self.model(users, pos_items, neg_items)
@@ -90,40 +92,71 @@ class AlphaRec_Data(AbstractData):
 
         self.user_cf_embeds = np.array(list(user_cf_embeds_dict.values()))
 
-def supcon_loss(user_emb, pos_item_embs, neg_item_embs, mask, tau):
-    """
-    Computes supervised contrastive loss for user-based anchors.
 
-    Parameters:
-    - user_emb: Tensor [B, D] - anchor user embeddings
-    - pos_item_embs: Tensor [B, P, D] - user's historical interacted item embeddings (padded)
-    - neg_item_embs: Tensor [B, N, D] - negative item embeddings
-    - mask: Tensor [B, P] - 1 for real positives, 0 for padding
-    - tau: float - temperature
+import torch
+import torch.nn.functional as F
+
+def supcon_loss(user_emb, pos_item_embs, neg_item_embs, mask, tau, neg_sample):
+    """
+    Unified SupCon loss for both external and in-batch negative sampling modes.
+
+    Args:
+        user_emb:        [B, D]        - anchor user embeddings
+        pos_item_embs:   [B, P, D]     - positive item embeddings (padded)
+        neg_item_embs:   [B, N, D] or [B, P, D] - either sampled negatives or reused positives (for in-batch)
+        mask:            [B, P]        - binary mask for valid positives
+        tau:             float         - temperature
+        neg_sample:      int           - if -1, use in-batch negatives; else use neg_item_embs
 
     Returns:
-    - Scalar loss (SupCon)
+        Scalar SupCon loss
     """
-    # Normalize for cosine similarity
-    user_emb = F.normalize(user_emb, dim=-1)
-    pos_item_embs = F.normalize(pos_item_embs, dim=-1)
-    neg_item_embs = F.normalize(neg_item_embs, dim=-1)
+    # Normalize all embeddings
+    user_emb = F.normalize(user_emb, dim=-1)           # [B, D]
+    pos_item_embs = F.normalize(pos_item_embs, dim=-1) # [B, P, D]
+    neg_item_embs = F.normalize(neg_item_embs, dim=-1) # shape depends on mode
 
     B, P, D = pos_item_embs.shape
     user_exp = user_emb.unsqueeze(1).expand(-1, P, -1)  # [B, P, D]
 
-    # Compute similarities
-    pos_sim = torch.exp(torch.sum(user_exp * pos_item_embs, dim=-1) / tau)  # [B, P]
-    neg_sim = torch.exp(torch.bmm(user_emb.unsqueeze(1), neg_item_embs.transpose(1, 2)).squeeze(1) / tau)  # [B, N]
+    # Positive similarities: [B, P]
+    pos_sim = torch.exp(torch.sum(user_exp * pos_item_embs, dim=-1) / tau)
 
-    # Denominator
-    neg_sum = neg_sim.sum(dim=1, keepdim=True)  # [B, 1]
-    denom = pos_sim + neg_sum.expand(-1, pos_sim.shape[1])  # [B, P]
-    
-    log_prob = torch.log(pos_sim / (denom + 1e-8))       # [B, P]
+    if neg_sample == -1:
+        # ---------- IN-BATCH NEGATIVE SAMPLING ----------
+        # Flatten all positive items across batch
+        all_items_flat = neg_item_embs.view(B * P, D)             # [B*P, D]
+        all_items_flat = all_items_flat.detach()                  # optional: prevent gradients through negs
 
-    # Mask padded positives
-    masked_log_prob = log_prob * mask                   # [B, P]
+        # Similarities: [B, B*P]
+        sim_matrix = torch.matmul(user_emb, all_items_flat.T) / tau
+        sim_matrix = torch.exp(sim_matrix)
+
+        # Create mask to exclude each user's own positives from denominator
+        neg_mask = torch.ones((B, B * P), device=user_emb.device)
+        for i in range(B):
+            valid_p = int(mask[i].sum().item())
+            neg_mask[i, i*P : i*P + valid_p] = 0  # zero out self-positives
+
+        # Denominator: sum over other users' positives
+        neg_denom = (sim_matrix * neg_mask).sum(dim=1, keepdim=True)  # [B, 1]
+        denom = neg_denom + pos_sim  # [B, P] - broadcast adds back self-positives
+
+    else:
+        # ---------- EXTERNAL NEGATIVE SAMPLING ----------
+        # Compute [B, N] similarities between users and their negatives
+        neg_sim = torch.exp(
+            torch.bmm(user_emb.unsqueeze(1), neg_item_embs.transpose(1, 2)).squeeze(1) / tau
+        )  # [B, N]
+
+        neg_sum = neg_sim.sum(dim=1, keepdim=True)    # [B, 1]
+        denom = pos_sim + neg_sum.expand(-1, P)       # [B, P]
+
+    # Compute log-probabilities for positives
+    log_prob = torch.log(pos_sim / (denom + 1e-8))    # [B, P]
+
+    # Apply mask to ignore padding
+    masked_log_prob = log_prob * mask                # [B, P]
     user_loss = -masked_log_prob.sum(dim=1) / (mask.sum(dim=1) + 1e-8)  # [B]
 
     return user_loss.mean()
@@ -137,6 +170,7 @@ class AlphaRec(AbstractModel):
         self.embed_size = args.hidden_size
         self.lm_model = args.lm_model
         self.model_version = args.model_version
+        self.neg_sample = args.neg
 
         self.init_user_cf_embeds = data.user_cf_embeds
         self.init_item_cf_embeds = data.item_cf_embeds
@@ -236,7 +270,7 @@ class AlphaRec(AbstractModel):
 
            pos_item_embs = all_items[padded]  # [B, P, D]
 
-           supcon_loss_value = supcon_loss(users_emb, pos_item_embs, neg_emb, mask, self.tau)     
+           supcon_loss_value = supcon_loss(users_emb, pos_item_embs, neg_emb, mask, self.tau, self.neg_sample)     
             
 
         if self.args.combine_loss:
