@@ -28,7 +28,7 @@ class AlphaRec_RS(AbstractRS):
             batch = [x.to(self.device) for x in batch]
             users, pos_items, users_pop, pos_items_pop  = batch[0], batch[1], batch[2], batch[3]
 
-            if self.args.infonce == 0 or self.args.neg_sample != -1:
+            if self.args.infonce == 0 or self.args.neg_sample != -1 or self.args.neg_sample != -2:    # in-batch negatives not needed
                 neg_items = batch[4]
                 neg_items_pop = batch[5]
             elif self.args.infonce == 1 and self.args.neg_sample == -1:      # in-batch negatuve supcon case 
@@ -106,8 +106,7 @@ def supcon_loss(user_emb, pos_item_embs, neg_item_embs, mask, tau, neg_sample):
         neg_item_embs:   [B, N, D] or [B, P, D] - either sampled negatives or reused positives (for in-batch)
         mask:            [B, P]        - binary mask for valid positives
         tau:             float         - temperature
-        neg_sample:      int           - if -1, use in-batch negatives; else use neg_item_embs
-
+        neg_sample:      int           - - neg_sample == -1 → full in-batch negatives, neg_sample == -2 → one negative per other user, neg_sample > 0   → external negatives
     Returns:
         Scalar SupCon loss
     """
@@ -141,7 +140,14 @@ def supcon_loss(user_emb, pos_item_embs, neg_item_embs, mask, tau, neg_sample):
         # Denominator: sum over other users' positives
         neg_denom = (sim_matrix * neg_mask).sum(dim=1, keepdim=True)  # [B, 1]
         denom = neg_denom + pos_sim  # [B, P] - broadcast adds back self-positives
-
+        
+    elif neg_sample == -2:
+        # 1 negative from each other user
+        # Input: neg_item_embs [B-1, D] → already pre-sampled in forward
+        sim = torch.exp(torch.matmul(user_emb, neg_item_embs.T) / tau)  # [B, B-1]
+        neg_sum = sim.sum(dim=1, keepdim=True)                          # [B, 1]
+        denom = pos_sim + neg_sum                                       # [B, P]
+        
     else:
         # ---------- EXTERNAL NEGATIVE SAMPLING ----------
         # Compute [B, N] similarities between users and their negatives
@@ -271,9 +277,20 @@ class AlphaRec(AbstractModel):
            pos_item_embs = all_items[padded]  # [B, P, D]
 
            if self.args.neg_sample == -1:
-              supcon_loss_value = supcon_loss(users_emb, pos_item_embs, pos_item_embs, mask, self.tau, self.neg_sample)  # in-batch negative sampling    
+              supcon_loss_value = supcon_loss(users_emb, pos_item_embs, pos_item_embs, mask, self.tau, self.neg_sample)  # in-batch full negative sampling comprising items from other users   
+           elif self.args.neg_sample == -2:
+              # One negative item from each other user
+              neg_emb_list = []
+              for i, item_ids in enumerate(pos_item_lists):
+                  others = [j for j in range(len(pos_item_lists)) if j != i and len(pos_item_lists[j]) > 0]
+                  sampled_ids = [rd.choice(pos_item_lists[j]) for j in others]
+                  neg_ids = torch.tensor(sampled_ids, dtype=torch.long, device=users.device)
+                  neg_emb = all_items[neg_ids]  # [B-1, D]
+                  neg_emb_list.append(neg_emb)
+              neg_item_embs = torch.stack(neg_emb_list)  # [B, B-1, D]
+              supcon_loss_value = supcon_loss(users_emb, pos_item_embs, neg_item_embs, mask, self.tau, self.neg_sample)  # in-batch random negative sampling comprising k = 1 items from other users
            else:
-             supcon_loss_value = supcon_loss(users_emb, pos_item_embs, neg_emb, mask, self.tau, self.neg_sample)   
+             supcon_loss_value = supcon_loss(users_emb, pos_item_embs, neg_emb, mask, self.tau, self.neg_sample)   # external fixed global negative sampling as in INoNCE
 
         if self.args.combine_loss:
             return ssm_loss + self.args.supcon_weight * supcon_loss_value
