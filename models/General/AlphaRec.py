@@ -4,7 +4,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import random as rd
 from .base.abstract_model import AbstractModel
 from .base.abstract_RS import AbstractRS
 from .base.abstract_data import AbstractData, helper_load, helper_load_train
@@ -28,10 +28,10 @@ class AlphaRec_RS(AbstractRS):
             batch = [x.to(self.device) for x in batch]
             users, pos_items, users_pop, pos_items_pop  = batch[0], batch[1], batch[2], batch[3]
 
-            if self.args.infonce == 0 or self.args.neg_sample != -1 or self.args.neg_sample != -2:    # in-batch negatives not needed
+            if self.args.infonce == 0 or (self.args.neg_sample != -1 and self.args.neg_sample != -2):    # in-batch negatives not needed
                 neg_items = batch[4]
                 neg_items_pop = batch[5]
-            elif self.args.infonce == 1 and self.args.neg_sample == -1:      # in-batch negatuve supcon case 
+            elif self.args.infonce == 1 and (self.args.neg_sample == -1 or self.args.neg_sample == -2):     # in-batch negatuve supcon case 
                 neg_items = pos_items
             
             self.model.train()
@@ -93,8 +93,6 @@ class AlphaRec_Data(AbstractData):
         self.user_cf_embeds = np.array(list(user_cf_embeds_dict.values()))
 
 
-import torch
-import torch.nn.functional as F
 
 def supcon_loss(user_emb, pos_item_embs, neg_item_embs, mask, tau, neg_sample):
     """
@@ -144,9 +142,9 @@ def supcon_loss(user_emb, pos_item_embs, neg_item_embs, mask, tau, neg_sample):
     elif neg_sample == -2:
         # 1 negative from each other user
         # Input: neg_item_embs [B-1, D] → already pre-sampled in forward
-        sim = torch.exp(torch.matmul(user_emb, neg_item_embs.T) / tau)  # [B, B-1]
-        neg_sum = sim.sum(dim=1, keepdim=True)                          # [B, 1]
-        denom = pos_sim + neg_sum                                       # [B, P]
+       sim = torch.exp(torch.sum(user_emb.unsqueeze(1) * neg_item_embs, dim=-1) / tau)  # [B, B-1]
+       neg_sum = sim.sum(dim=1, keepdim=True)                          # [B, 1]
+       denom = pos_sim + neg_sum                                       # [B, P]
         
     else:
         # ---------- EXTERNAL NEGATIVE SAMPLING ----------
