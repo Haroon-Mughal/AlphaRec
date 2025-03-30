@@ -417,9 +417,10 @@ class TrainDataset(torch.utils.data.Dataset):
         user_pop = self.user_pop_idx[user]
         pos_item_pop = self.item_pop_idx[pos_item]
 
-        if self.infonce == 1 and self.neg_sample == -1: #in-batch negative sampling used for original supcon
+          
+        if (self.infonce == 1) and (self.neg_sample == -1 or self.neg_sample == -2): #in-batch negative sampling used for original supcon or #in-batch random k negative sampling
             return user, pos_item, user_pop, pos_item_pop
-
+            
         elif self.infonce == 1 and self.neg_sample != -1: # InfoNCE negative sampling, for infonce and supcon external neg sampling
             if(len(self.nu_info) > 0):                    # for mixed data
                 # period = index 
